@@ -1,2 +1,3 @@
 # coop
-An on-chain coop, built on Tezos
+
+This is the code for an on-chain coop, built on Tezos.
