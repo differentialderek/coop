@@ -1,8 +1,6 @@
 // TODO: some upgradeability mechanism 
 // TODO: views for balances 
 // TODO: yea vs nay spelling?
-// TODO: if the fundraising fails, a mechanism to redeem funds (some condition has to be met though)
-// TODO: entrypoint to update oracle (admin only)
 
 (* =============================================================================
  * Storage 
@@ -44,7 +42,8 @@ type storage = {
     tz_usd_oracle : address ; // the Harbinger oracle for the USD/XTZ exchange rate 
 
     // outstanding tokens 
-    outstanding_tokens : nat ;
+    outstanding_tokens : nat ; // with six digits of precision, i.e. 1 token = 1_000_000n
+    total_token_supply : nat ; // with six digits of precision, i.e. 1 token = 1_000_000n
 
     // coop membership token ownership ledger
     ledger : (owner , qty) big_map ; 
@@ -62,6 +61,10 @@ type storage = {
     token_metadata : (token_id, token_metadata) big_map;
     // contract metadata 
     metadata : (string, bytes) big_map;
+
+    // fundraising details 
+    can_redeem : bool ;
+    can_transfer : bool ; // for compliance
 }
 
 (* =============================================================================
@@ -119,6 +122,10 @@ type entrypoint =
 | Cast_vote of cast_vote // cast a vote
 | Discharge_treasury of discharge_treasury // send an amt from the contract's balance to an address
 | Issue_tokens of nat // issue more coop membership tokens
+// housekeeping 
+| Update_oracle of address // entrypoint to update the tz/usd oracle
+| Redeem_tokens of unit // if fundraising fails, buyers can redeem their tokens 
+| Allow_transfer of unit // 
 
 // result
 type result = operation list * storage 
@@ -235,6 +242,7 @@ let rec execute_transfer (param , storage : transfer * storage) : storage =
         )
 
 let rec transfer (param, storage : transfer list * storage) : result = 
+    if storage.can_transfer = false then (failwith error_PERMISSIONS_DENIED : result) else
     match param with 
     | [] -> (([] : operation list), storage)
     | hd :: tl -> 
@@ -392,8 +400,45 @@ let issue_tokens (param : nat) (storage : storage) : result =
     if Tezos.sender <> storage.admin then (failwith error_PERMISSIONS_DENIED : result) else 
     // issue tokens 
     ([] : operation list),
-    { storage with outstanding_tokens = storage.outstanding_tokens + param }
+    { storage with 
+        outstanding_tokens = storage.outstanding_tokens + param ;
+        total_token_supply = storage.total_token_supply + param ; }
 
+(* ==========
+ * Housekeeping Functions 
+ * ========== *)
+
+let update_oracle (param : address) (storage : storage) : result = 
+    // check permissions
+    if Tezos.sender <> storage.admin then (failwith error_PERMISSIONS_DENIED : result) else 
+    ([] : operation list),
+    { storage with 
+      tz_usd_oracle = param ; }
+
+let redeem_tokens (storage : storage) : result = 
+    if storage.can_redeem = false then (failwith error_PERMISSIONS_DENIED : result) else 
+    // update ledger and get their token balance 
+    let (token_balance, ledger) = 
+        match Big_map.get_and_update { token_owner = Tezos.source ; token_id = 0n ;} (None : nat option) storage.ledger with
+        | (None, l) -> (0n, l)
+        | (Some b, l) -> (b, l) in 
+    // make the operation that returns XTZ
+    let op_redeem_tokens = 
+        let tz_to_receive = 
+            token_balance * Tezos.balance / storage.total_token_supply in 
+        let recipient_contract = 
+            match (Tezos.get_contract_opt Tezos.source : unit contract option) with 
+            | None -> (failwith error_INVALID_ADDRESS : unit contract)
+            | Some c -> c in 
+        Tezos.transaction () tz_to_receive recipient_contract in 
+    // finish 
+    [ op_redeem_tokens ;], 
+    {storage with ledger = ledger ;}
+
+let allow_transfer (storage : storage) : result = 
+    if Tezos.source <> storage.admin then (failwith error_PERMISSIONS_DENIED : result) else 
+    ([] : operation list),
+    { storage with can_transfer = true ; }
 
 (* =============================================================================
  * Main Function
@@ -423,3 +468,10 @@ let rec main (entrypoint, storage : entrypoint * storage) : result =
         discharge_treasury param storage 
     | Issue_tokens param -> 
         issue_tokens param storage 
+    // housekeeping 
+    | Update_oracle param ->
+        update_oracle param storage
+    | Redeem_tokens _ ->
+        redeem_tokens storage
+    | Allow_transfer _ ->
+        allow_transfer storage
