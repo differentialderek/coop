@@ -1,5 +1,4 @@
 // TODO: some upgradeability mechanism 
-// TODO: views for balances 
 // TODO: yea vs nay spelling?
 
 (* =============================================================================
@@ -149,14 +148,13 @@ let error_PERMISSIONS_DENIED = 10n // General catch-all for operator-related per
 let error_ID_ALREADY_IN_USE = 11n // A token ID can only be used once, error if a user wants to add a token ID that's already there
 let error_COLLISION = 12n
 let error_NO_PROPOSAL_FOUND = 13n 
-let error_MUST_HAVE_A_NONZERO_BALANCE_TO_VOTE = 14n
-let error_VOTE_ALREADY_CAST = 15n
-let error_DEADLINE_IS_PASSED = 16n
-let error_INVALID_ADDRESS = 17n
-let error_INSUFFICIENT_TOKENS_BOUGHT = 18n
-let error_ORACLE_FAILED = 19n
-
-
+let error_NO_VOTER_FOUND = 14n
+let error_MUST_HAVE_A_NONZERO_BALANCE_TO_VOTE = 15n
+let error_VOTE_ALREADY_CAST = 16n
+let error_DEADLINE_IS_PASSED = 17n
+let error_INVALID_ADDRESS = 18n
+let error_INSUFFICIENT_TOKENS_BOUGHT = 19n
+let error_ORACLE_FAILED = 20n
 
 (* =============================================================================
  * Aux Functions
@@ -439,6 +437,36 @@ let allow_transfer (storage : storage) : result =
     if Tezos.source <> storage.admin then (failwith error_PERMISSIONS_DENIED : result) else 
     ([] : operation list),
     { storage with can_transfer = true ; }
+
+(* =============================================================================
+ * Contract Views
+ * ============================================================================= *)
+
+// balance_of view 
+[@view] let view_balance_of (owner, storage: owner * storage) : nat = 
+    match Big_map.find_opt owner storage.ledger with 
+    | None -> 0n 
+    | Some b -> b 
+
+// total outstanding tokens 
+[@view] let view_outstanding_tokens (_, storage : unit * storage) : nat = 
+    storage.outstanding_tokens
+
+// total token supply
+[@view] let view_total_token_supply (_, storage : unit * storage) : nat = 
+    storage.total_token_supply
+
+// a user's vote 
+[@view] let view_vote (voter_data, storage : voter_data * storage) : vote = 
+    match Big_map.find_opt voter_data storage.votes with 
+    | None -> (failwith error_NO_VOTER_FOUND : vote)
+    | Some v -> v
+
+// a proposal
+[@view] let view_proposal (proposal_id, storage : proposal_id * storage) : proposal = 
+    match Big_map.find_opt proposal_id storage.proposals with 
+    | None -> (failwith error_NO_PROPOSAL_FOUND : proposal)
+    | Some p -> p
 
 (* =============================================================================
  * Main Function
